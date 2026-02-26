@@ -35,10 +35,12 @@ bash install-hiveos.sh --address YOUR_SASEUL_ADDRESS
 |------|-------------|
 | `pool_miner.py` | GPU 풀 마이너 (systemd 서비스용, GPU_AutoMiner IPC) |
 | `gpu_pool_miner.py` | GPU 풀 마이너 (standalone, 명령줄 인자) |
-| `cpu_miner.py` | CPU 풀 마이너 (GPU 없이 테스트용) |
+| `cpu_miner.py` | CPU 풀 마이너 (GPU 없이 채굴) |
 | `install.sh` | Ubuntu/Debian 자동 설치 스크립트 |
 | `install-hiveos.sh` | HiveOS 자동 설치 스크립트 |
-| `saseul-pool-miner.service` | systemd 서비스 파일 |
+| `saseul-pool-miner.service` | GPU 마이너 systemd 서비스 파일 |
+| `saseul-cpu-miner.service` | CPU 마이너 systemd 서비스 파일 |
+| `miner_watchdog.sh` | 5분마다 서비스 상태 체크 & 자동 재시작 |
 
 ---
 
@@ -215,15 +217,33 @@ bash install-hiveos.sh --address YOUR_SASEUL_ADDRESS
 
 ---
 
-## CPU Miner (GPU 없이 테스트)
+## CPU Miner
 
-GPU가 없는 환경에서 풀 연결 테스트용으로 사용합니다.
+GPU 없이 CPU로 풀 채굴을 합니다. GPU와 동시에 실행하여 추가 해시파워를 얻을 수 있습니다.
+
+### 직접 실행
 
 ```bash
-python3 cpu_miner.py --address YOUR_ADDRESS --worker cpu-test
+python3 cpu_miner.py --address YOUR_ADDRESS --worker cpu0
 ```
 
-> CPU 마이닝은 GPU 대비 매우 느립니다 (약 1/1000). 테스트 목적으로만 사용하세요.
+### systemd 서비스로 등록
+
+```bash
+# 서비스 파일 복사 후 주소 수정
+sudo cp saseul-cpu-miner.service /etc/systemd/system/
+sudo nano /etc/systemd/system/saseul-cpu-miner.service
+# --address YOUR_SASEUL_ADDRESS 부분을 본인 주소로 변경
+
+sudo systemctl daemon-reload
+sudo systemctl enable saseul-cpu-miner
+sudo systemctl start saseul-cpu-miner
+
+# 로그 확인
+journalctl -u saseul-cpu-miner -f
+```
+
+> CPU 마이닝은 GPU 대비 매우 느립니다 (약 1/1000). GPU와 병행 사용을 권장합니다.
 
 ---
 
@@ -254,6 +274,24 @@ curl -s http://pool.takty.kr/api/status | python3 -m json.tool
 
 # 내 마이너 상태
 curl -s http://pool.takty.kr/api/miners/YOUR_ADDRESS | python3 -m json.tool
+```
+
+---
+
+## Watchdog (자동 재시작)
+
+마이너 서비스가 죽으면 5분마다 자동으로 재시작합니다.
+
+```bash
+# watchdog 스크립트 복사
+sudo cp miner_watchdog.sh /opt/saseul-pool-miner/
+sudo chmod +x /opt/saseul-pool-miner/miner_watchdog.sh
+
+# cron 등록 (5분마다 실행)
+(crontab -l 2>/dev/null; echo "*/5 * * * * /opt/saseul-pool-miner/miner_watchdog.sh >> /var/saseul-shared/watchdog.log 2>&1") | crontab -
+
+# watchdog 로그 확인
+tail -f /var/saseul-shared/watchdog.log
 ```
 
 ---

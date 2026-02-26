@@ -1,0 +1,13 @@
+[Unit]
+Description=SASEUL Pool CPU Miner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/saseul-pool-miner/cpu_miner.py --pool pool.takty.kr --port 3333 --address YOUR_SASEUL_ADDRESS --worker cpu0
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
