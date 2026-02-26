@@ -1,8 +1,8 @@
 [Unit]
 Description=SASEUL Pool Miner (GPU Stratum Client)
 After=network-online.target gpu-autominer.service
-Wants=network-online.target
-Requires=gpu-autominer.service
+Wants=network-online.target gpu-autominer.service
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -16,7 +16,7 @@ Environment=STATUS_FILE=/var/saseul-shared/gpu_pool_status.json
 Environment=SUCCESS_LOG_DIR=/var/saseul-shared/success_logs
 ExecStart=/usr/bin/python3 /var/saseul-shared/pool_miner.py
 Restart=always
-RestartSec=10
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target

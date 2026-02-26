@@ -25,6 +25,7 @@ STATUS_FILE = os.environ.get('STATUS_FILE', '/var/saseul-shared/gpu_pool_status.
 SUCCESS_LOG_DIR = os.environ.get('SUCCESS_LOG_DIR', '/var/saseul-shared/success_logs')
 
 RECONNECT_DELAY = 5
+MAX_RECONNECT_DELAY = 60
 HASHRATE_LOG_INTERVAL = 30
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -408,16 +409,21 @@ class StratumClient:
         """Background thread to receive pool notifications.
         Note: mining.notify is handled in _recv_lines automatically."""
         while self.running and self.connected:
-            lines = self._recv_lines(5.0)
-            for line in lines:
-                method = line.get('method')
-                if method == 'mining.set_difficulty':
-                    log.info(f'Difficulty adjusted: {line.get("params")}')
-                elif line.get('id') and line.get('result') is not None:
-                    if line.get('result') is True:
-                        log.debug(f'Share accepted (id={line["id"]})')
-                    elif line.get('error'):
-                        log.warning(f'Share rejected: {line.get("error")}')
+            try:
+                lines = self._recv_lines(5.0)
+                for line in lines:
+                    method = line.get('method')
+                    if method == 'mining.set_difficulty':
+                        log.info(f'Difficulty adjusted: {line.get("params")}')
+                    elif line.get('id') and line.get('result') is not None:
+                        if line.get('result') is True:
+                            log.debug(f'Share accepted (id={line["id"]})')
+                        elif line.get('error'):
+                            log.warning(f'Share rejected: {line.get("error")}')
+            except Exception as e:
+                log.error(f'recv_thread error: {e}')
+                self.connected = False
+                break
 
     def get_job(self) -> Optional[Dict]:
         with self.job_lock:
@@ -450,14 +456,22 @@ def mine_with_pool():
 
     last_log_time = time.monotonic()
     last_ghps = 0.0
+    reconnect_delay = RECONNECT_DELAY
 
     while not _shutdown:
         client = StratumClient(POOL_HOST, POOL_PORT)
 
         if not client.connect():
-            log.info(f'Retrying in {RECONNECT_DELAY}s...')
-            time.sleep(RECONNECT_DELAY)
+            log.info(f'Retrying in {reconnect_delay}s...')
+            # Sleep in small increments to respond to shutdown quickly
+            for _ in range(int(reconnect_delay)):
+                if _shutdown:
+                    break
+                time.sleep(1)
+            reconnect_delay = min(reconnect_delay * 1.5, MAX_RECONNECT_DELAY)
             continue
+
+        reconnect_delay = RECONNECT_DELAY  # Reset on successful connect
 
         if not client.subscribe():
             log.error('Subscribe failed')
@@ -603,7 +617,10 @@ def mine_with_pool():
         log.info('Pool connection lost, reconnecting...')
         client.running = False
         client.disconnect()
-        time.sleep(RECONNECT_DELAY)
+        for _ in range(RECONNECT_DELAY):
+            if _shutdown:
+                break
+            time.sleep(1)
 
     log.info('Pool miner stopped')
     write_status(pool_connected=False)
