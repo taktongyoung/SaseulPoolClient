@@ -1,0 +1,22 @@
+[Unit]
+Description=SASEUL Pool Miner (GPU Stratum Client)
+After=network-online.target gpu-autominer.service
+Wants=network-online.target
+Requires=gpu-autominer.service
+
+[Service]
+Type=simple
+User=root
+Environment=POOL_HOST=pool.takty.kr
+Environment=POOL_PORT=3333
+Environment=MINER_ADDRESS=0570f01f9cdd71575eeed1a998f80cce825290e32270
+Environment=WORKER_NAME=gpu-worker
+Environment=GPU_SOCK_PATH=/var/saseul-shared/gpu_pow.sock
+Environment=STATUS_FILE=/var/saseul-shared/gpu_pool_status.json
+Environment=SUCCESS_LOG_DIR=/var/saseul-shared/success_logs
+ExecStart=/usr/bin/python3 /var/saseul-shared/pool_miner.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
