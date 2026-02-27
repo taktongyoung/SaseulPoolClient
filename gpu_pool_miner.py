@@ -179,18 +179,28 @@ class StratumClient:
 # ── GPU IPC Client ──
 
 class GPUMiner:
-    def __init__(self, sock_path=SOCK_PATH):
+    def __init__(self, sock_path=SOCK_PATH, remote=None):
         self.sock_path = sock_path
+        self.remote = remote  # (host, port) tuple for TCP proxy mode
 
     def mine_round(self, pow_left, target, height, main_height):
         """Send one mine request to GPU_AutoMiner, get result."""
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(SOCK_TIMEOUT)
-        try:
-            sock.connect(self.sock_path)
-        except (socket.error, OSError) as e:
-            print(f'[GPU] IPC connect failed: {e}')
-            return None
+        if self.remote:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(SOCK_TIMEOUT)
+            try:
+                sock.connect(self.remote)
+            except (socket.error, OSError) as e:
+                print(f'[GPU] Remote connect failed ({self.remote[0]}:{self.remote[1]}): {e}')
+                return None
+        else:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(SOCK_TIMEOUT)
+            try:
+                sock.connect(self.sock_path)
+            except (socket.error, OSError) as e:
+                print(f'[GPU] IPC connect failed: {e}')
+                return None
 
         req = {
             'cmd': 'mine',
@@ -213,7 +223,7 @@ class GPUMiner:
                     line, _ = buf.split(b'\n', 1)
                     return json.loads(line)
         except (socket.timeout, socket.error, json.JSONDecodeError) as e:
-            print(f'[GPU] IPC error: {e}')
+            print(f'[GPU] Error: {e}')
             return None
         finally:
             sock.close()
@@ -228,10 +238,18 @@ def main():
     parser.add_argument('--address', required=True, help='SASEUL miner address')
     parser.add_argument('--worker', default='gpu0', help='Worker name')
     parser.add_argument('--gpu-sock', default=SOCK_PATH, help='GPU_AutoMiner IPC socket path')
+    parser.add_argument('--gpu-remote', default='',
+                        help='Remote GPU proxy address (host:port). If set, uses TCP instead of Unix socket')
     args = parser.parse_args()
 
+    remote = None
+    if args.gpu_remote:
+        host, port = args.gpu_remote.rsplit(':', 1)
+        remote = (host, int(port))
+        print(f'[*] Using remote GPU proxy: {host}:{port}')
+
     stratum = StratumClient(args.pool, args.port, args.address, args.worker)
-    gpu = GPUMiner(args.gpu_sock)
+    gpu = GPUMiner(args.gpu_sock, remote=remote)
 
     total_hashes = 0
     start_time = time.monotonic()

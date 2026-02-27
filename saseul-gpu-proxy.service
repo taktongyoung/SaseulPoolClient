@@ -1,0 +1,13 @@
+[Unit]
+Description=SASEUL GPU Proxy Server (TCP to IPC)
+After=network.target gpu-autominer.service
+Wants=gpu-autominer.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/saseul-pool-miner/gpu_proxy.py --port 9800 --gpu-sock /var/saseul-shared/gpu_pow.sock
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

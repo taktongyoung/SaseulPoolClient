@@ -40,6 +40,8 @@ bash install-hiveos.sh --address YOUR_SASEUL_ADDRESS
 | `install-hiveos.sh` | HiveOS 자동 설치 스크립트 |
 | `saseul-pool-miner.service` | GPU 마이너 systemd 서비스 파일 |
 | `saseul-cpu-miner.service` | CPU 마이너 systemd 서비스 파일 |
+| `gpu_proxy.py` | GPU 프록시 서버 (외부 IP에서 GPU 사용 가능) |
+| `saseul-gpu-proxy.service` | GPU 프록시 systemd 서비스 파일 |
 | `GPU_AutoMiner` | SASEUL PoW CUDA 바이너리 (Git LFS) |
 | `cuda_kernel.cu` | CUDA 커널 소스 |
 | `SL.cfg` | GPU_AutoMiner 설정 파일 (라이선스 키 포함) |
@@ -257,6 +259,48 @@ python3 gpu_pool_miner.py \
   --worker my-gpu \
   --gpu-sock /var/saseul-shared/gpu_pow.sock
 ```
+
+---
+
+## GPU Proxy (원격 GPU 마이닝)
+
+GPU가 없는 머신에서도 원격 GPU를 이용해 채굴할 수 있습니다.
+
+### 구조
+
+```
+[원격 마이너] --TCP:9800--> [gpu_proxy.py] --Unix socket--> [GPU_AutoMiner]
+```
+
+### GPU 서버 측 (GPU가 있는 머신)
+
+```bash
+# gpu_proxy.py 실행 (모든 IP 허용)
+python3 gpu_proxy.py --port 9800
+
+# 특정 IP만 허용
+python3 gpu_proxy.py --port 9800 --allow-ips 192.168.1.10,10.0.0.5
+
+# systemd 서비스로 등록
+sudo cp saseul-gpu-proxy.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now saseul-gpu-proxy
+```
+
+### 원격 마이너 측 (GPU 없는 머신)
+
+```bash
+# --gpu-remote로 GPU 서버 주소 지정
+python3 gpu_pool_miner.py \
+  --pool pool.takty.kr \
+  --port 3333 \
+  --address YOUR_ADDRESS \
+  --worker remote-gpu \
+  --gpu-remote GPU_SERVER_IP:9800
+```
+
+> **보안 주의**: GPU 프록시는 인증 없이 GPU 자원을 공유합니다.
+> 반드시 `--allow-ips`로 IP를 제한하거나, 방화벽으로 포트 9800을 보호하세요.
 
 ---
 
