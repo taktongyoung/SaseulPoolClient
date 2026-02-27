@@ -40,6 +40,9 @@ bash install-hiveos.sh --address YOUR_SASEUL_ADDRESS
 | `install-hiveos.sh` | HiveOS 자동 설치 스크립트 |
 | `saseul-pool-miner.service` | GPU 마이너 systemd 서비스 파일 |
 | `saseul-cpu-miner.service` | CPU 마이너 systemd 서비스 파일 |
+| `GPU_AutoMiner` | SASEUL PoW CUDA 바이너리 (Git LFS) |
+| `cuda_kernel.cu` | CUDA 커널 소스 |
+| `SL.cfg` | GPU_AutoMiner 설정 파일 (라이선스 키 포함) |
 | `miner_watchdog.sh` | 5분마다 서비스 상태 체크 & 자동 재시작 |
 
 ---
@@ -70,43 +73,42 @@ sudo reboot
 ### 3. GPU_AutoMiner 설치
 
 GPU_AutoMiner는 SASEUL PoW 연산을 수행하는 CUDA 바이너리입니다.
+본 저장소에 포함되어 있으므로 별도 다운로드가 필요 없습니다.
+
+> **Note:** GPU_AutoMiner는 Git LFS로 관리됩니다. `git clone` 시 자동으로 다운로드되지만,
+> 만약 파일 크기가 비정상적으로 작다면 `git lfs pull`을 실행하세요.
 
 ```bash
-# GPU_AutoMiner 바이너리 배치
-mkdir -p /home/$USER/GPU_AutoMiner
-# GPU_AutoMiner, cuda_kernel.cu 파일을 이 경로에 복사
+# Git LFS 설치 (이미 설치된 경우 생략)
+sudo apt install git-lfs
+git lfs install
 
-# 공유 디렉토리 생성
+# 저장소 클론 (GPU_AutoMiner, cuda_kernel.cu, SL.cfg 포함)
+git clone https://github.com/taktongyoung/SaseulPoolClient.git
+cd SaseulPoolClient
+
+# GPU_AutoMiner 배치
+sudo mkdir -p /opt/saseul-miner
+sudo cp GPU_AutoMiner cuda_kernel.cu /opt/saseul-miner/
+sudo chmod +x /opt/saseul-miner/GPU_AutoMiner
+
+# 공유 디렉토리 생성 및 SL.cfg 설정
 sudo mkdir -p /var/saseul-shared
+sudo cp SL.cfg /var/saseul-shared/SL.cfg
 
-# SL.cfg 설정
-cat > /var/saseul-shared/SL.cfg << 'EOF'
-[wallet]
-address=YOUR_SASEUL_ADDRESS
-
-[gpu]
-block=256
-grid=1024
-inner_loop_init=4096
-
-[gpu_tuning]
-target_kernel_ms=150.0
-min_inner=64
-max_inner=4096
-smooth_alpha=0.3
-EOF
+# SL.cfg에서 지갑 주소를 본인 주소로 변경
+sudo sed -i "s/address=.*/address=YOUR_SASEUL_ADDRESS/" /var/saseul-shared/SL.cfg
 
 # GPU_AutoMiner 서비스 등록
-sudo cat > /etc/systemd/system/gpu-autominer.service << 'EOF'
+sudo tee /etc/systemd/system/gpu-autominer.service > /dev/null << 'EOF'
 [Unit]
 Description=SASEUL GPU Auto Miner
 After=network.target
 
 [Service]
 Type=simple
-User=$USER
-ExecStart=/home/$USER/GPU_AutoMiner/GPU_AutoMiner
-WorkingDirectory=/home/$USER/GPU_AutoMiner
+ExecStart=/opt/saseul-miner/GPU_AutoMiner
+WorkingDirectory=/opt/saseul-miner
 Restart=always
 RestartSec=10
 
@@ -117,6 +119,10 @@ EOF
 sudo systemctl daemon-reload
 sudo systemctl enable gpu-autominer
 sudo systemctl start gpu-autominer
+
+# 정상 실행 확인
+systemctl status gpu-autominer
+ls -la /var/saseul-shared/gpu_pow.sock
 ```
 
 ### 4. Pool Miner Client 설치
@@ -155,29 +161,23 @@ ssh user@YOUR_RIG_IP
 ### 2. GPU_AutoMiner 설치
 
 ```bash
-# GPU_AutoMiner 바이너리를 리그에 업로드
+# Git LFS 설치
+apt install git-lfs
+git lfs install
+
+# 저장소 클론 (GPU_AutoMiner, cuda_kernel.cu, SL.cfg 포함)
+git clone https://github.com/taktongyoung/SaseulPoolClient.git
+cd SaseulPoolClient
+
+# GPU_AutoMiner 배치
 mkdir -p /opt/saseul-miner
-# scp 또는 wget으로 GPU_AutoMiner, cuda_kernel.cu 복사
+cp GPU_AutoMiner cuda_kernel.cu /opt/saseul-miner/
+chmod +x /opt/saseul-miner/GPU_AutoMiner
 
-# 공유 디렉토리
+# 공유 디렉토리 생성 및 SL.cfg 설정
 mkdir -p /var/saseul-shared
-
-# SL.cfg 설정
-cat > /var/saseul-shared/SL.cfg << 'EOF'
-[wallet]
-address=YOUR_SASEUL_ADDRESS
-
-[gpu]
-block=256
-grid=1024
-inner_loop_init=4096
-
-[gpu_tuning]
-target_kernel_ms=150.0
-min_inner=64
-max_inner=4096
-smooth_alpha=0.3
-EOF
+cp SL.cfg /var/saseul-shared/SL.cfg
+sed -i "s/address=.*/address=YOUR_SASEUL_ADDRESS/" /var/saseul-shared/SL.cfg
 
 # 서비스 등록
 cat > /etc/systemd/system/gpu-autominer.service << 'EOF'
