@@ -131,37 +131,64 @@ class StratumClient:
                 return msgs
         return []
 
+    def recv_reply(self, msg_id, timeout=30):
+        """Blocking read until a reply with matching id arrives.
+        Other messages (notifications, other replies) are processed along the way."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            msgs = self.recv_messages(timeout=0.5)
+            for msg in msgs:
+                self.process_message(msg)
+                if msg.get('id') == msg_id:
+                    return msg
+        return None
+
+    def process_message(self, msg):
+        """Process a single server message."""
+        method = msg.get('method')
+        if method == 'mining.notify':
+            self.job = msg['params']
+            print(f'[Stratum] New job: height={self.job["height"]} '
+                  f'diff={self.job["difficulty"]} share_diff={self.job["share_difficulty"]}')
+        elif method == 'mining.notify_block':
+            print(f'[Stratum] !!! BLOCK FOUND at height {msg["params"]["height"]}!')
+        elif 'result' in msg:
+            if msg['result'] is True:
+                self.shares_accepted += 1
+            elif msg.get('error'):
+                print(f'[Stratum] Rejected: {msg["error"]}')
+
     def process_messages(self, msgs):
         for msg in msgs:
-            method = msg.get('method')
-            if method == 'mining.notify':
-                self.job = msg['params']
-                print(f'[Stratum] New job: height={self.job["height"]} '
-                      f'diff={self.job["difficulty"]} share_diff={self.job["share_difficulty"]}')
-            elif method == 'mining.notify_block':
-                print(f'[Stratum] !!! BLOCK FOUND at height {msg["params"]["height"]}!')
-            elif 'result' in msg:
-                if msg['result'] is True:
-                    self.shares_accepted += 1
-                elif msg.get('error'):
-                    print(f'[Stratum] Rejected: {msg["error"]}')
+            self.process_message(msg)
 
     def handshake(self):
+        # Subscribe
         self.send('mining.subscribe', [])
-        msgs = self.recv_one()
-        self.process_messages(msgs)
+        sub_id = self.msg_id
+        reply = self.recv_reply(sub_id, timeout=30)
+        if reply is None:
+            print('[Stratum] Subscribe timeout, reconnecting...')
+            raise ConnectionError('Subscribe timeout')
+        print(f'[Stratum] Subscribed')
 
+        # Authorize
         self.send('mining.authorize', [self.address, self.worker])
-        msgs = self.recv_one()
-        self.process_messages(msgs)
+        auth_id = self.msg_id
+        reply = self.recv_reply(auth_id, timeout=30)
+        if reply is None:
+            print('[Stratum] Authorize timeout')
+            raise ConnectionError('Authorize timeout')
 
-        auth_ok = any(m.get('result') is True for m in msgs)
+        auth_ok = reply.get('result') is True
         if not auth_ok:
-            print('[Stratum] Auth failed!')
+            print(f'[Stratum] Auth failed: {reply}')
             sys.exit(1)
         print(f'[Stratum] Authorized: {self.address}/{self.worker}')
 
+        # Wait for job (may already be received during handshake)
         if self.job is None:
+            print('[Stratum] Waiting for job...')
             for _ in range(20):
                 msgs = self.recv_one(timeout=1)
                 self.process_messages(msgs)
