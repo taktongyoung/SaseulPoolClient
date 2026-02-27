@@ -109,43 +109,66 @@ class PoolMiner:
                 return msgs
         return []
 
+    def recv_reply(self, msg_id, timeout=30):
+        """Blocking read until a reply with matching id arrives.
+        Other messages (notifications, other replies) are processed along the way."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            msgs = self.recv_messages(timeout=0.5)
+            for msg in msgs:
+                self.process_message(msg)
+                if msg.get('id') == msg_id:
+                    return msg
+        return None
+
+    def process_message(self, msg):
+        """Process a single server message (notification or share result)."""
+        method = msg.get('method')
+        if method == 'mining.notify':
+            self.job = msg['params']
+            print(f'[+] New job: height={self.job["height"]} '
+                  f'diff={self.job["difficulty"]} '
+                  f'share_diff={self.job["share_difficulty"]}')
+        elif method == 'mining.notify_block':
+            print(f'[!!!] BLOCK FOUND at height {msg["params"]["height"]}!')
+        elif 'result' in msg:
+            # Share result (with or without id)
+            if msg['result'] is True:
+                self.shares_ok += 1
+            elif msg.get('error'):
+                print(f'[-] Rejected: {msg["error"]}')
+
     def process_messages(self, msgs):
         for msg in msgs:
-            method = msg.get('method')
-            if method == 'mining.notify':
-                self.job = msg['params']
-                print(f'[+] New job: height={self.job["height"]} '
-                      f'diff={self.job["difficulty"]} '
-                      f'share_diff={self.job["share_difficulty"]}')
-            elif method == 'mining.notify_block':
-                print(f'[!!!] BLOCK FOUND at height {msg["params"]["height"]}!')
-            elif 'result' in msg:
-                if msg['result'] is True:
-                    self.shares_ok += 1
-                elif msg.get('error'):
-                    print(f'[-] Rejected: {msg["error"]}')
+            self.process_message(msg)
 
     # ── Handshake ──
 
     def handshake(self):
         # Subscribe
         self.send('mining.subscribe', [])
-        msgs = self.recv_one()
-        self.process_messages(msgs)
-        print(f'[*] Subscribed')
+        sub_id = self.msg_id
+        reply = self.recv_reply(sub_id, timeout=30)
+        if reply is None:
+            print('[!] Subscribe timeout, reconnecting...')
+            raise ConnectionError('Subscribe timeout')
+        print(f'[*] Subscribed (result: {type(reply.get("result")).__name__})')
 
         # Authorize
         self.send('mining.authorize', [self.address, self.worker])
-        msgs = self.recv_one()
-        self.process_messages(msgs)
+        auth_id = self.msg_id
+        reply = self.recv_reply(auth_id, timeout=30)
+        if reply is None:
+            print('[!] Authorize timeout')
+            raise ConnectionError('Authorize timeout')
 
-        auth_ok = any(m.get('result') is True for m in msgs)
+        auth_ok = reply.get('result') is True
         if not auth_ok:
-            print(f'[!] Authorization failed')
+            print(f'[!] Authorization failed: {reply}')
             sys.exit(1)
         print(f'[*] Authorized: {self.address}/{self.worker}')
 
-        # Wait for job (may already be in processed messages)
+        # Wait for job (may already be received during handshake)
         if self.job is None:
             print('[*] Waiting for job...')
             for _ in range(20):
