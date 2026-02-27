@@ -99,15 +99,108 @@ if nvidia-smi &>/dev/null; then
     done
 fi
 
-# ── Step 2: Check GPU_AutoMiner ──
-if [ -S "$GPU_SOCK_PATH" ]; then
-    ok "GPU_AutoMiner IPC socket found: $GPU_SOCK_PATH"
-elif systemctl is-active gpu-autominer &>/dev/null; then
-    ok "GPU_AutoMiner service is running"
+# ── Determine source directory (used by Step 2 and 3) ──
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/pool_miner.py" ]; then
+    SOURCE_DIR="$SCRIPT_DIR"
 else
-    warn "GPU_AutoMiner not detected."
-    warn "Make sure gpu-autominer.service is running and ${GPU_SOCK_PATH} exists."
-    warn "Without GPU_AutoMiner, you can still use cpu_miner.py (much slower)."
+    info "Downloading from GitHub..."
+    TMP_DIR=$(mktemp -d)
+    git clone https://github.com/taktongyoung/SaseulPoolClient.git "$TMP_DIR" 2>/dev/null
+    SOURCE_DIR="$TMP_DIR"
+fi
+
+# ── Step 2: Install GPU_AutoMiner ──
+GPU_MINER_DIR="/opt/saseul-miner"
+
+if systemctl is-active gpu-autominer &>/dev/null; then
+    ok "GPU_AutoMiner service is already running"
+else
+    info "Installing GPU_AutoMiner..."
+
+    # Git LFS 확인 및 설치
+    if ! command -v git-lfs &>/dev/null; then
+        info "Installing git-lfs..."
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq git-lfs
+    fi
+    git lfs install --skip-repo &>/dev/null
+
+    # LFS 파일이 제대로 다운로드되었는지 확인
+    if [ -f "$SOURCE_DIR/GPU_AutoMiner" ] && [ "$(stat -c%s "$SOURCE_DIR/GPU_AutoMiner" 2>/dev/null)" -gt 1000000 ]; then
+        ok "GPU_AutoMiner binary found in repo"
+    else
+        info "Pulling GPU_AutoMiner via Git LFS..."
+        (cd "$SOURCE_DIR" && git lfs pull 2>/dev/null) || true
+    fi
+
+    if [ -f "$SOURCE_DIR/GPU_AutoMiner" ] && [ "$(stat -c%s "$SOURCE_DIR/GPU_AutoMiner" 2>/dev/null)" -gt 1000000 ]; then
+        sudo mkdir -p "$GPU_MINER_DIR"
+        sudo cp "$SOURCE_DIR/GPU_AutoMiner" "$GPU_MINER_DIR/"
+        sudo cp "$SOURCE_DIR/cuda_kernel.cu" "$GPU_MINER_DIR/" 2>/dev/null || true
+        sudo chmod +x "$GPU_MINER_DIR/GPU_AutoMiner"
+
+        # SL.cfg 설정
+        sudo mkdir -p "$SHARED_DIR"
+        if [ -f "$SHARED_DIR/SL.cfg" ]; then
+            ok "SL.cfg already exists, keeping current config"
+        else
+            if [ -f "$SOURCE_DIR/SL.cfg" ]; then
+                sudo cp "$SOURCE_DIR/SL.cfg" "$SHARED_DIR/SL.cfg"
+            else
+                sudo tee "$SHARED_DIR/SL.cfg" > /dev/null << SLCFG
+[wallet]
+address=${MINER_ADDRESS}
+
+[gpu]
+block=256
+grid=1024
+inner_loop_init=4096
+
+[gpu_tuning]
+target_kernel_ms=150.0
+min_inner=64
+max_inner=4096
+smooth_alpha=0.3
+SLCFG
+            fi
+            # 지갑 주소 반영
+            sudo sed -i "s/^address=.*/address=${MINER_ADDRESS}/" "$SHARED_DIR/SL.cfg"
+            ok "SL.cfg created with your address"
+        fi
+
+        # gpu-autominer systemd 서비스 등록
+        sudo tee /etc/systemd/system/gpu-autominer.service > /dev/null << EOF2
+[Unit]
+Description=SASEUL GPU Auto Miner
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${GPU_MINER_DIR}/GPU_AutoMiner
+WorkingDirectory=${GPU_MINER_DIR}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF2
+
+        sudo systemctl daemon-reload
+        sudo systemctl enable gpu-autominer
+        sudo systemctl start gpu-autominer
+        sleep 2
+
+        if systemctl is-active gpu-autominer &>/dev/null; then
+            ok "GPU_AutoMiner installed and running"
+        else
+            warn "GPU_AutoMiner installed but failed to start. Check: journalctl -u gpu-autominer -f"
+        fi
+    else
+        warn "GPU_AutoMiner binary not found or incomplete."
+        warn "Try: git lfs pull && bash install.sh --address ${MINER_ADDRESS}"
+        warn "Without GPU_AutoMiner, you can still use cpu_miner.py (much slower)."
+    fi
 fi
 
 # ── Step 3: Install files ──
@@ -115,18 +208,6 @@ info "Installing to ${INSTALL_DIR}..."
 
 sudo mkdir -p "$INSTALL_DIR"
 sudo mkdir -p "$SHARED_DIR/success_logs"
-
-# Determine source directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "$SCRIPT_DIR/pool_miner.py" ]; then
-    SOURCE_DIR="$SCRIPT_DIR"
-else
-    # Download from GitHub
-    info "Downloading from GitHub..."
-    TMP_DIR=$(mktemp -d)
-    git clone --depth 1 https://github.com/taktongyoung/SaseulPoolClient.git "$TMP_DIR" 2>/dev/null
-    SOURCE_DIR="$TMP_DIR"
-fi
 
 sudo cp "$SOURCE_DIR/pool_miner.py"       "$INSTALL_DIR/"
 sudo cp "$SOURCE_DIR/gpu_pool_miner.py"   "$INSTALL_DIR/"
